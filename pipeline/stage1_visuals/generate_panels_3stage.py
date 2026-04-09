@@ -11,13 +11,20 @@ Usage:
   python pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 1
   python pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --shot s001
   python pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --resume
+
+Notes:
+  - 병렬 실행 금지: Stage1이 끝나고 GPU가 비는 걸 확인한 뒤 Stage2를 돌려야 함.
+  - 이 러너는 의도적으로 단일 프로세스 + stage-sequential(pass) 방식으로만 동작한다.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass
@@ -186,10 +193,166 @@ def _render_stage(
     return client.get_image(images[0])
 
 
+@contextlib.contextmanager
+def _exclusive_lock(lock_path: Path):
+    """Prevent concurrent runs that would overload the GPU/ComfyUI queue."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w", encoding="utf-8") as f:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError(f"Another run is already active (lock): {lock_path}")
+        f.write(f"pid={os.getpid()}\n")
+        f.flush()
+        yield
+
+
+def _stage1_pass(
+    *,
+    cuts: list[CutItem],
+    client: ComfyUIClient,
+    wf1: dict,
+    stage1_dir: Path,
+    blank: Path,
+    timeout_s: int,
+    resume: bool,
+) -> tuple[int, int, int]:
+    ok = skip = fail = 0
+    for i, cut in enumerate(cuts, start=1):
+        sid = cut.shot_id
+        parent_type = (cut.parent_type or "SKIT").upper()
+        prompt = cut.data.get("compiled_prompt")
+        if not prompt:
+            print(f"[S1 {i}/{len(cuts)}] {sid} SKIP (no compiled_prompt)")
+            skip += 1
+            continue
+        out_path = stage1_dir / f"{sid}_layout.png"
+        if resume and out_path.exists():
+            print(f"[S1 {i}/{len(cuts)}] {sid} SKIP (exists)")
+            skip += 1
+            continue
+        try:
+            ref = _pick_reference_screenshot(cut.data, parent_type) or blank
+            ref_upload = client.upload_image(str(ref))
+            overrides = {
+                "Load Reference Screenshot": {"image": ref_upload["name"]},
+                "Positive Prompt": {"text": prompt},
+                "Random Noise": {"noise_seed": _stable_seed(sid, 1)},
+            }
+            t0 = time.time()
+            img = _render_stage(client=client, workflow=wf1, overrides=overrides, timeout_s=timeout_s)
+            _write_image_bytes(out_path, img)
+            print(f"[S1 {i}/{len(cuts)}] {sid} OK ({time.time()-t0:.0f}s)")
+            ok += 1
+        except Exception as e:
+            msg = str(e).replace("\n", " ")
+            print(f"[S1 {i}/{len(cuts)}] {sid} ERROR: {msg[:240]}")
+            fail += 1
+    return ok, skip, fail
+
+
+def _stage2_pass(
+    *,
+    cuts: list[CutItem],
+    client: ComfyUIClient,
+    wf2: dict,
+    stage1_dir: Path,
+    stage2_dir: Path,
+    blank: Path,
+    timeout_s: int,
+    resume: bool,
+) -> tuple[int, int, int]:
+    ok = skip = fail = 0
+    for i, cut in enumerate(cuts, start=1):
+        sid = cut.shot_id
+        prompt = cut.data.get("compiled_prompt")
+        if not prompt:
+            print(f"[S2 {i}/{len(cuts)}] {sid} SKIP (no compiled_prompt)")
+            skip += 1
+            continue
+        in_path = stage1_dir / f"{sid}_layout.png"
+        out_path = stage2_dir / f"{sid}_char.png"
+        if not in_path.exists():
+            print(f"[S2 {i}/{len(cuts)}] {sid} SKIP (missing Stage1: {in_path.name})")
+            skip += 1
+            continue
+        if resume and out_path.exists():
+            print(f"[S2 {i}/{len(cuts)}] {sid} SKIP (exists)")
+            skip += 1
+            continue
+        try:
+            chars = _infer_characters_for_cut(cut.data)
+            golden = _find_golden_shot(chars) or blank
+            ref_upload = client.upload_image(str(in_path))
+            golden_upload = client.upload_image(str(golden))
+            overrides = {
+                "Load Reference Screenshot": {"image": ref_upload["name"]},
+                "Load Character Golden Shot": {"image": golden_upload["name"]},
+                "Positive Prompt": {"text": prompt},
+                "Random Noise": {"noise_seed": _stable_seed(sid, 2)},
+            }
+            t0 = time.time()
+            img = _render_stage(client=client, workflow=wf2, overrides=overrides, timeout_s=timeout_s)
+            _write_image_bytes(out_path, img)
+            print(f"[S2 {i}/{len(cuts)}] {sid} OK ({time.time()-t0:.0f}s)")
+            ok += 1
+        except Exception as e:
+            msg = str(e).replace("\n", " ")
+            print(f"[S2 {i}/{len(cuts)}] {sid} ERROR: {msg[:240]}")
+            fail += 1
+    return ok, skip, fail
+
+
+def _stage3_pass(
+    *,
+    cuts: list[CutItem],
+    client: ComfyUIClient,
+    wf3: dict,
+    stage2_dir: Path,
+    stage3_dir: Path,
+    timeout_s: int,
+    resume: bool,
+) -> tuple[int, int, int]:
+    ok = skip = fail = 0
+    for i, cut in enumerate(cuts, start=1):
+        sid = cut.shot_id
+        in_path = stage2_dir / f"{sid}_char.png"
+        out_path = stage3_dir / f"panel_{sid}.png"
+        if not in_path.exists():
+            print(f"[S3 {i}/{len(cuts)}] {sid} SKIP (missing Stage2: {in_path.name})")
+            skip += 1
+            continue
+        if resume and out_path.exists():
+            print(f"[S3 {i}/{len(cuts)}] {sid} SKIP (exists)")
+            skip += 1
+            continue
+        try:
+            stage2_upload = client.upload_image(str(in_path))
+            overrides = {
+                "Load Stage 2 Result": {"image": stage2_upload["name"]},
+            }
+            t0 = time.time()
+            img = _render_stage(client=client, workflow=wf3, overrides=overrides, timeout_s=timeout_s)
+            _write_image_bytes(out_path, img)
+            print(f"[S3 {i}/{len(cuts)}] {sid} OK ({time.time()-t0:.0f}s)")
+            ok += 1
+        except Exception as e:
+            msg = str(e).replace("\n", " ")
+            print(f"[S3 {i}/{len(cuts)}] {sid} ERROR: {msg[:240]}")
+            fail += 1
+    return ok, skip, fail
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, help="episodes/epXX/manifest.json")
-    parser.add_argument("--stage", type=int, default=0, choices=[0, 1, 2, 3], help="0=all, 1/2/3=single stage")
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=0,
+        choices=[0, 1, 2, 3],
+        help="0=all (S1 pass -> S2 pass -> S3 pass), 1/2/3=single stage pass",
+    )
     parser.add_argument("--shot", default="", help="Filter by shot_id prefix (e.g. s001)")
     parser.add_argument("--limit", type=int, default=0, help="Process only first N cuts (after filtering)")
     parser.add_argument("--resume", action="store_true", help="Skip outputs that already exist")
@@ -233,95 +396,72 @@ def main() -> None:
     client = ComfyUIClient(url=args.comfyui_url)
     client.health_check(min_free_gb=1.0)
 
-    totals = {"ok": 0, "skip": 0, "fail": 0}
     t_all = time.time()
 
-    for i, cut in enumerate(cuts, start=1):
-        sid = cut.shot_id
-        parent_type = (cut.parent_type or "SKIT").upper()
-        cut_data = cut.data
-        prompt = cut_data.get("compiled_prompt")
-        if not prompt:
-            print(f"[{i}/{len(cuts)}] {sid} SKIP (no compiled_prompt)")
-            totals["skip"] += 1
-            continue
+    lock_path = ep_dir / "storyboard" / ".render.lock"
 
-        stage1_path = stage1_dir / f"{sid}_layout.png"
-        stage2_path = stage2_dir / f"{sid}_char.png"
-        final_path = stage3_dir / f"panel_{sid}.png"
+    s1 = (0, 0, 0)
+    s2 = (0, 0, 0)
+    s3 = (0, 0, 0)
 
-        try:
-            # Stage 1
-            if args.stage in (0, 1):
-                if args.resume and stage1_path.exists():
-                    print(f"[{i}/{len(cuts)}] {sid} Stage1 SKIP (exists)")
-                else:
-                    ref = _pick_reference_screenshot(cut_data, parent_type) or blank
-                    ref_upload = client.upload_image(str(ref))
-                    overrides = {
-                        "Load Reference Screenshot": {"image": ref_upload["name"]},
-                        "Positive Prompt": {"text": prompt},
-                        "Random Noise": {"noise_seed": _stable_seed(sid, 1)},
-                    }
-                    t0 = time.time()
-                    img = _render_stage(client=client, workflow=wf1, overrides=overrides, timeout_s=args.timeout)
-                    _write_image_bytes(stage1_path, img)
-                    print(f"[{i}/{len(cuts)}] {sid} Stage1 OK ({time.time()-t0:.0f}s)")
+    with _exclusive_lock(lock_path):
+        if args.stage in (0, 1):
+            print("=" * 60)
+            print("Stage 1 Pass (composition/layout)")
+            print("=" * 60)
+            client.health_check(min_free_gb=1.0)
+            s1 = _stage1_pass(
+                cuts=cuts,
+                client=client,
+                wf1=wf1,
+                stage1_dir=stage1_dir,
+                blank=blank,
+                timeout_s=args.timeout,
+                resume=args.resume,
+            )
 
-            # Stage 2
-            if args.stage in (0, 2):
-                if args.stage == 2:
-                    _require_file(stage1_path, "Stage1 output (layout)")
-                if args.resume and stage2_path.exists():
-                    print(f"[{i}/{len(cuts)}] {sid} Stage2 SKIP (exists)")
-                else:
-                    _require_file(stage1_path, "Stage1 output (layout)")
-                    chars = _infer_characters_for_cut(cut_data)
-                    golden = _find_golden_shot(chars) or blank
-                    ref_upload = client.upload_image(str(stage1_path))
-                    golden_upload = client.upload_image(str(golden))
-                    overrides = {
-                        "Load Reference Screenshot": {"image": ref_upload["name"]},
-                        "Load Character Golden Shot": {"image": golden_upload["name"]},
-                        "Positive Prompt": {"text": prompt},
-                        "Random Noise": {"noise_seed": _stable_seed(sid, 2)},
-                    }
-                    t0 = time.time()
-                    img = _render_stage(client=client, workflow=wf2, overrides=overrides, timeout_s=args.timeout)
-                    _write_image_bytes(stage2_path, img)
-                    print(f"[{i}/{len(cuts)}] {sid} Stage2 OK ({time.time()-t0:.0f}s)")
+        if args.stage in (0, 2):
+            print("=" * 60)
+            print("Stage 2 Pass (character via IP-Adapter)")
+            print("=" * 60)
+            client.health_check(min_free_gb=1.0)
+            s2 = _stage2_pass(
+                cuts=cuts,
+                client=client,
+                wf2=wf2,
+                stage1_dir=stage1_dir,
+                stage2_dir=stage2_dir,
+                blank=blank,
+                timeout_s=args.timeout,
+                resume=args.resume,
+            )
 
-            # Stage 3
-            if args.stage in (0, 3):
-                if args.stage == 3:
-                    _require_file(stage2_path, "Stage2 output (character)")
-                if args.resume and final_path.exists():
-                    print(f"[{i}/{len(cuts)}] {sid} Stage3 SKIP (exists)")
-                else:
-                    _require_file(stage2_path, "Stage2 output (character)")
-                    stage2_upload = client.upload_image(str(stage2_path))
-                    overrides = {
-                        "Load Stage 2 Result": {"image": stage2_upload["name"]},
-                    }
-                    t0 = time.time()
-                    img = _render_stage(client=client, workflow=wf3, overrides=overrides, timeout_s=args.timeout)
-                    _write_image_bytes(final_path, img)
-                    print(f"[{i}/{len(cuts)}] {sid} Stage3 OK ({time.time()-t0:.0f}s)")
-
-            totals["ok"] += 1
-        except Exception as e:
-            totals["fail"] += 1
-            msg = str(e).replace("\n", " ")
-            print(f"[{i}/{len(cuts)}] {sid} ERROR: {msg[:240]}")
+        if args.stage in (0, 3):
+            print("=" * 60)
+            print("Stage 3 Pass (AnimeSharp 4x -> 1920x1080, no crop)")
+            print("=" * 60)
+            client.health_check(min_free_gb=1.0)
+            s3 = _stage3_pass(
+                cuts=cuts,
+                client=client,
+                wf3=wf3,
+                stage2_dir=stage2_dir,
+                stage3_dir=stage3_dir,
+                timeout_s=args.timeout,
+                resume=args.resume,
+            )
 
     dt = time.time() - t_all
+    ok_total = s1[0] + s2[0] + s3[0]
+    skip_total = s1[1] + s2[1] + s3[1]
+    fail_total = s1[2] + s2[2] + s3[2]
     print("=" * 60)
     print(f"COMPLETE in {dt/60:.1f} min")
-    print(f"  OK:   {totals['ok']}")
-    print(f"  SKIP: {totals['skip']}")
-    print(f"  FAIL: {totals['fail']}")
+    print(f"  S1 OK/SKIP/FAIL: {s1[0]}/{s1[1]}/{s1[2]}")
+    print(f"  S2 OK/SKIP/FAIL: {s2[0]}/{s2[1]}/{s2[2]}")
+    print(f"  S3 OK/SKIP/FAIL: {s3[0]}/{s3[1]}/{s3[2]}")
+    print(f"  TOTAL OK/SKIP/FAIL: {ok_total}/{skip_total}/{fail_total}")
 
 
 if __name__ == "__main__":
     main()
-

@@ -124,19 +124,20 @@ Stage 3: 퀄업
 ### CLI 인터페이스
 
 ```bash
-# 전체 3단계
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json
+# 전체 3단계 (Stage1 pass 전량 완료 -> Stage2 pass -> Stage3 pass)
+# 병렬 실행 금지: 동시에 두 프로세스를 켜면 `.render.lock`에 의해 실패한다.
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json
 
-# 특정 단계만
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 1
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 2
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 3
+# 특정 stage pass만 (운영 권장: stage별로 따로 돌리고, GPU 완전히 비면 다음 stage로)
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 1 --resume
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 2 --resume
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 3 --resume
 
 # 특정 씬만
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --shot s001
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --shot s001
 
 # 이어서 (이미 생성된 컷 스킵)
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --resume
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --resume
 ```
 
 ### 핵심 함수 (기존 코드 재사용)
@@ -155,7 +156,7 @@ img_data = client.get_image(result["images"][0])  # 결과 다운로드
 overrides = {
     "Load Reference Screenshot": {"image": ref_upload["name"]},
     "Positive Prompt": {"text": compiled_prompt},
-    "Random Noise": {"noise_seed": 42069 + hash(cut_id) % 99999},
+    "Random Noise": {"noise_seed": stable_seed(cut_id, stage=1)},
     "Load Character Golden Shot": {"image": golden_upload["name"]},
 }
 
@@ -206,9 +207,12 @@ def find_golden(characters):
    - decompose_cuts (메타만) → prompt_compiler (프롬프트) → generate_panels_3stage (렌더)
    - Stage 1 → Stage 2 → Stage 3 순서
 
-5. **IP-Adapter에 외부 스크린샷 넣지 말 것** — 골든샷만 사용.
+5. **병렬 실행 금지** — Stage 1 pass가 전량 끝나고 GPU가 비는 걸 확인한 뒤 Stage 2 pass 실행.
+   - 러너는 에피소드별 `episodes/<ep>/storyboard/.render.lock`로 동시 실행을 막는다.
 
-6. **배경은 밝은 파스텔** — 어두운 배경 금지 (CONFESSIONAL/INTERVIEW 포함).
+6. **IP-Adapter에 외부 스크린샷 넣지 말 것** — 골든샷만 사용.
+
+7. **배경은 밝은 파스텔** — 어두운 배경 금지 (CONFESSIONAL/INTERVIEW 포함).
 
 ---
 
@@ -227,9 +231,9 @@ Stage 1/2는 latent 해상도와 ModelSamplingFlux 해상도가 일치하도록 
 
 | Stage | 컷당 | 207컷 전체 |
 |-------|------|-----------|
-| Stage 1 (768x768, 15step) | ~15초 | ~50분 |
-| Stage 2 (1024x1024, 25step) | ~25초 | ~85분 |
-| Stage 3 (업스케일) | ~10초 | ~35분 |
+| Stage 1 (1344x768, 15step) | ~15초 | ~50분 |
+| Stage 2 (1344x768, 25step) | ~25초 | ~85분 |
+| Stage 3 (AnimeSharp 4x → 1920x1080) | ~10초 | ~35분 |
 | **총** | | **~170분 (3시간)** |
 
 ---
@@ -238,7 +242,7 @@ Stage 1/2는 latent 해상도와 ModelSamplingFlux 해상도가 일치하도록 
 
 S001 (11컷)만 먼저 돌려서 확인:
 ```bash
-python3 generate_panels_3stage.py --manifest episodes/ep01/manifest.json --shot s001
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --shot s001
 ```
 
 확인할 것:

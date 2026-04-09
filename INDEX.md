@@ -17,7 +17,7 @@ Windows path (WSL): `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\
 - `pipeline/stage1_visuals/decompose_cuts.py` — script to split scenes into cuts/shots (metadata only)
 - `pipeline/stage1_visuals/generate_storyboard_full.py` — current single-pass renderer (reference for 3-stage renderer)
 - `pipeline/stage1_visuals/generate_keyframes.py` — IP-Adapter + ControlNet patterns
-- `pipeline/stage1_visuals/generate_panels_3stage.py` — 3-stage runner (Stage1 layout -> Stage2 character -> Stage3 upscale)
+- `pipeline/stage1_visuals/generate_panels_3stage.py` — 3-stage runner (stage-sequential passes; Stage1 pass -> Stage2 pass -> Stage3 pass; uses `.render.lock` to block concurrent runs)
 
 ## Workflows (ComfyUI)
 

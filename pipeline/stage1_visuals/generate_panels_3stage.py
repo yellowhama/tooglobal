@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""3-stage storyboard/panel generator — manifest-driven.
+"""Stage-sequential storyboard/panel generator — manifest-driven.
 
 Stages:
   1) Composition/layout (Depth ControlNet only, reference screenshot)
   2) Character (Stage1 output as ControlNet ref + Golden shot via IP-Adapter)
+  2.5) Optional Kontext refinement (Stage2 consistency/detail cleanup)
   3) Upscale (AnimeSharp 4x -> 1920x1080, no cropping)
 
 Usage:
@@ -41,6 +42,7 @@ from scene_cluster import search_scenes  # noqa: E402
 
 STAGE1_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "stage1_composition.json"
 STAGE2_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "stage2_character.json"
+STAGE25_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "stage2_5_kontext.json"
 STAGE3_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "stage3_upscale.json"
 
 CHAR_DIR = PROJECT_ROOT / "assets" / "characters"
@@ -309,17 +311,23 @@ def _stage3_pass(
     client: ComfyUIClient,
     wf3: dict,
     stage2_dir: Path,
+    stage25_dir: Path | None,
     stage3_dir: Path,
     timeout_s: int,
     resume: bool,
+    prefer_kontext: bool,
 ) -> tuple[int, int, int]:
     ok = skip = fail = 0
     for i, cut in enumerate(cuts, start=1):
         sid = cut.shot_id
         in_path = stage2_dir / f"{sid}_char.png"
+        if prefer_kontext and stage25_dir is not None:
+            k = stage25_dir / f"{sid}_kontext.png"
+            if k.exists():
+                in_path = k
         out_path = stage3_dir / f"panel_{sid}.png"
         if not in_path.exists():
-            print(f"[S3 {i}/{len(cuts)}] {sid} SKIP (missing Stage2: {in_path.name})")
+            print(f"[S3 {i}/{len(cuts)}] {sid} SKIP (missing input: {in_path.name})")
             skip += 1
             continue
         if resume and out_path.exists():
@@ -343,6 +351,71 @@ def _stage3_pass(
     return ok, skip, fail
 
 
+def _stage25_kontext_pass(
+    *,
+    cuts: list[CutItem],
+    client: ComfyUIClient,
+    wf25: dict,
+    stage2_dir: Path,
+    stage25_dir: Path,
+    timeout_s: int,
+    resume: bool,
+) -> tuple[int, int, int]:
+    """Stage 2.5: Kontext refinement pass (runs after Stage2, before Stage3)."""
+    ok = skip = fail = 0
+    stage25_dir.mkdir(parents=True, exist_ok=True)
+
+    # Required node titles in the Kontext API workflow.
+    required_titles = {
+        "Load Stage 2 Result",
+        "Save Kontext Refined",
+    }
+    titles = {n.get("_meta", {}).get("title", "") for n in wf25.values()}
+    missing = [t for t in required_titles if t not in titles]
+    if missing:
+        raise RuntimeError(
+            "Kontext workflow is missing required node titles: "
+            + ", ".join(missing)
+            + ". Export an API-format workflow and ensure node titles match."
+        )
+
+    for i, cut in enumerate(cuts, start=1):
+        sid = cut.shot_id
+        in_path = stage2_dir / f"{sid}_char.png"
+        out_path = stage25_dir / f"{sid}_kontext.png"
+
+        if not in_path.exists():
+            print(f"[S2.5 {i}/{len(cuts)}] {sid} SKIP (missing Stage2: {in_path.name})")
+            skip += 1
+            continue
+        if resume and out_path.exists():
+            print(f"[S2.5 {i}/{len(cuts)}] {sid} SKIP (exists)")
+            skip += 1
+            continue
+
+        try:
+            inp = client.upload_image(str(in_path))
+            overrides = {
+                "Load Stage 2 Result": {"image": inp["name"]},
+                # Optional: if the workflow has a prompt node titled "Positive Prompt",
+                # we feed the compiled prompt for light consistency guidance.
+            }
+            prompt = cut.data.get("compiled_prompt")
+            if prompt:
+                overrides["Positive Prompt"] = {"text": prompt}
+            t0 = time.time()
+            img = _render_stage(client=client, workflow=wf25, overrides=overrides, timeout_s=timeout_s)
+            _write_image_bytes(out_path, img)
+            print(f"[S2.5 {i}/{len(cuts)}] {sid} OK ({time.time()-t0:.0f}s)")
+            ok += 1
+        except Exception as e:
+            msg = str(e).replace("\n", " ")
+            print(f"[S2.5 {i}/{len(cuts)}] {sid} ERROR: {msg[:240]}")
+            fail += 1
+
+    return ok, skip, fail
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True, help="episodes/epXX/manifest.json")
@@ -350,12 +423,14 @@ def main() -> None:
         "--stage",
         type=int,
         default=0,
-        choices=[0, 1, 2, 3],
-        help="0=all (S1 pass -> S2 pass -> S3 pass), 1/2/3=single stage pass",
+        choices=[0, 1, 2, 25, 3],
+        help="0=all (S1 -> S2 -> [S2.5 kontext] -> S3), 1/2/25/3=single stage pass",
     )
     parser.add_argument("--shot", default="", help="Filter by shot_id prefix (e.g. s001)")
     parser.add_argument("--limit", type=int, default=0, help="Process only first N cuts (after filtering)")
     parser.add_argument("--resume", action="store_true", help="Skip outputs that already exist")
+    parser.add_argument("--kontext", action="store_true", help="Enable Stage 2.5 Kontext refinement between Stage2 and Stage3")
+    parser.add_argument("--kontext-workflow", default=str(STAGE25_WORKFLOW_PATH), help="API-format Kontext workflow path")
     parser.add_argument("--comfyui-url", default="http://127.0.0.1:8188")
     parser.add_argument("--timeout", type=int, default=900)
     args = parser.parse_args()
@@ -372,9 +447,11 @@ def main() -> None:
 
     stage1_dir = ep_dir / "storyboard" / "stage1_layout"
     stage2_dir = ep_dir / "storyboard" / "stage2_character"
+    stage25_dir = ep_dir / "storyboard" / "stage2_kontext"
     stage3_dir = ep_dir / "storyboard" / "panels"
     stage1_dir.mkdir(parents=True, exist_ok=True)
     stage2_dir.mkdir(parents=True, exist_ok=True)
+    stage25_dir.mkdir(parents=True, exist_ok=True)
     stage3_dir.mkdir(parents=True, exist_ok=True)
 
     blank = _ensure_blank_white(PROJECT_ROOT)
@@ -392,6 +469,13 @@ def main() -> None:
     wf1 = load_workflow(str(STAGE1_WORKFLOW_PATH))
     wf2 = load_workflow(str(STAGE2_WORKFLOW_PATH))
     wf3 = load_workflow(str(STAGE3_WORKFLOW_PATH))
+    wf25 = None
+    if args.stage == 25 or (args.kontext and args.stage in (0, 3)):
+        # Kontext is optional, but if requested we require an API-format workflow file.
+        wf25_path = Path(args.kontext_workflow)
+        if not wf25_path.is_absolute():
+            wf25_path = PROJECT_ROOT / wf25_path
+        wf25 = load_workflow(str(wf25_path))
 
     client = ComfyUIClient(url=args.comfyui_url)
     client.health_check(min_free_gb=1.0)
@@ -402,6 +486,7 @@ def main() -> None:
 
     s1 = (0, 0, 0)
     s2 = (0, 0, 0)
+    s25 = (0, 0, 0)
     s3 = (0, 0, 0)
 
     with _exclusive_lock(lock_path):
@@ -436,6 +521,23 @@ def main() -> None:
                 resume=args.resume,
             )
 
+        if args.stage == 25 or (args.stage == 0 and args.kontext):
+            print("=" * 60)
+            print("Stage 2.5 Pass (Kontext refinement)")
+            print("=" * 60)
+            if wf25 is None:
+                raise RuntimeError("Kontext requested but no workflow was loaded (unexpected).")
+            client.health_check(min_free_gb=1.0)
+            s25 = _stage25_kontext_pass(
+                cuts=cuts,
+                client=client,
+                wf25=wf25,
+                stage2_dir=stage2_dir,
+                stage25_dir=stage25_dir,
+                timeout_s=args.timeout,
+                resume=args.resume,
+            )
+
         if args.stage in (0, 3):
             print("=" * 60)
             print("Stage 3 Pass (AnimeSharp 4x -> 1920x1080, no crop)")
@@ -446,19 +548,22 @@ def main() -> None:
                 client=client,
                 wf3=wf3,
                 stage2_dir=stage2_dir,
+                stage25_dir=stage25_dir,
                 stage3_dir=stage3_dir,
                 timeout_s=args.timeout,
                 resume=args.resume,
+                prefer_kontext=args.kontext,
             )
 
     dt = time.time() - t_all
-    ok_total = s1[0] + s2[0] + s3[0]
-    skip_total = s1[1] + s2[1] + s3[1]
-    fail_total = s1[2] + s2[2] + s3[2]
+    ok_total = s1[0] + s2[0] + s25[0] + s3[0]
+    skip_total = s1[1] + s2[1] + s25[1] + s3[1]
+    fail_total = s1[2] + s2[2] + s25[2] + s3[2]
     print("=" * 60)
     print(f"COMPLETE in {dt/60:.1f} min")
     print(f"  S1 OK/SKIP/FAIL: {s1[0]}/{s1[1]}/{s1[2]}")
     print(f"  S2 OK/SKIP/FAIL: {s2[0]}/{s2[1]}/{s2[2]}")
+    print(f"  S2.5 OK/SKIP/FAIL: {s25[0]}/{s25[1]}/{s25[2]}")
     print(f"  S3 OK/SKIP/FAIL: {s3[0]}/{s3[1]}/{s3[2]}")
     print(f"  TOTAL OK/SKIP/FAIL: {ok_total}/{skip_total}/{fail_total}")
 

@@ -25,6 +25,33 @@
 - 로컬 Paperclip은 자체 `paperclipai` CLI를 우선 사용하고, youtube-studio에서는 `paperclip-status`로 health/config/UI/API만 얇게 노출한다.
 - `2026-04-03` 기준 교정: `scene 1개 = shot 1개` 규칙은 폐기한다. 실제 애니메이션 제작은 반드시 `scene -> beat -> shot -> storyboard -> animatic -> layout -> keyframe -> motion -> assembly` 순서를 따른다.
 
+## Current Canonical Storyboard Workflow (2026-04-09)
+
+현재 스토리보드/패널 생성의 운영 기준은 `pipeline/stage1_visuals/generate_panels_3stage.py`다.
+
+실행 순서:
+- `Stage 1`: `workflows/stage1_composition.json`
+- `Stage 2`: `workflows/stage2_character.json`
+- `Stage 2.5` 선택: `workflows/stage2_5_kontext.json`
+- `Stage 3`: `workflows/stage3_upscale.json`
+
+핵심 운영 규칙:
+- 병렬 실행 금지. Stage 1 pass 전체 완료 후 Stage 2, 그 다음 Stage 2.5, 마지막 Stage 3 순서로만 진행한다.
+- 러너는 `episodes/<ep>/storyboard/.render.lock`으로 동시 실행을 차단한다.
+- 해상도는 Stage 1/2가 `1344x768`, Stage 3가 `1920x1080` 최종 출력이다.
+- 센터 크롭은 사용하지 않는다. 16:9를 처음부터 생성하고 Stage 3는 AnimeSharp 4x 후 리사이즈만 한다.
+
+현재 파일 상태:
+- `stage1_composition.json`, `stage2_character.json`, `stage3_upscale.json`은 API 실행 가능한 canonical workflow다.
+- `workflows/reference/Flux Kontext.json`는 ComfyUI UI graph 포맷이다. 바로 실행 불가.
+- Kontext를 운영에 넣으려면 ComfyUI에서 API 포맷으로 export한 `workflows/stage2_5_kontext.json`가 필요하다.
+
+출력 경로:
+- `episodes/<ep>/storyboard/stage1_layout/*_layout.png`
+- `episodes/<ep>/storyboard/stage2_character/*_char.png`
+- `episodes/<ep>/storyboard/stage2_kontext/*_kontext.png`
+- `episodes/<ep>/storyboard/panels/panel_*.png`
+
 ---
 
 ## 0. 사전 준비
@@ -119,8 +146,12 @@
 | channel_reference_builder.py | `pipeline/shared/channel_reference_builder.py` | YouTube reference_index → 채널 스타일/가이드 프로파일 |
 | **scene_cluster.py** | **`pipeline/shared/scene_cluster.py`** | **씬 클러스터링 (17K 프레임 → 5,518 씬) + 씬 단위 레퍼런스 검색 + 작품 스타일 가중치** |
 | **filmagent_camera.py** | **`pipeline/shared/filmagent_camera.py`** | **FilmAgent Debate-Judge 카메라 선택 (LLM 2명 독립 플랜 → 교차 리뷰 → 심사)** |
+| **storyboard_qc.py** | **`pipeline/shared/storyboard_qc.py`** | **스토리보드/키프레임 QC — 캐릭터·구도·배경·프롬프트 정합성 자동 검사** |
+| **manifest_validator.py** | **`pipeline/shared/manifest_validator.py`** | **manifest 필수 필드 검증 (characters, enriched_visual_prompt, beat_role)** |
+| **fountain_to_manifest.py** | **`pipeline/shared/fountain_to_manifest.py`** | **Fountain 대본 → manifest.json 변환 (<<VIS>> 파싱 + 16캐릭터 매핑 + beat_role 자동)** |
+| **prompt_compiler.py** | **`pipeline/shared/prompt_compiler.py`** | **<<VIS>> 자연어 → booru 태그 변환 (enriched_visual_prompt → compiled_prompt, 200~350자)** |
 
-> Stage 1 visuals canonical path: `generate_character.py`, `generate_backgrounds.py`, `generate_keyframes.py`, `refine_consistency_kontext.py`
+> Canonical storyboard/panel path: `generate_panels_3stage.py` -> optional `refine_consistency_kontext.py` / Stage 2.5 Kontext -> Stage 3 upscale
 >
 > `compose_keyframe_ep*.py` 계열은 episode-specific experiment/legacy surface로 남아 있으며, 운영 기준 canonical entrypoint는 아니다.
 
@@ -553,14 +584,16 @@ python validate_camera_rules.py --preset-check context/shot_presets.json
 
 이 단계는 생성된 정지 키프레임을 움직이는 영상 샷으로 변환합니다.
 
-### 실행 (예정)
+### 실행
 ```
-/animate-video ep{XX}
+python pipeline/stage4_animation/animate_liveportrait.py --manifest episodes/ep{XX}/manifest.json --all
 ```
 
 ### 무슨 일이 일어나는가
-1. **LivePortrait (lib_ai/LivePortrait)**: 캐릭터의 얼굴이 크게 나오는 샷(CU/MCU)에 대해, 생성된 TTS 오디오 트랙을 기반으로 입모양(Lip-sync)과 표정 변화 애니메이션을 적용합니다.
-2. **Kitsu 상태 업데이트**: 완료된 애니메이션 클립을 Kitsu에 'Animation Complete'로 기록.
+1. **LivePortrait (lib_ai/LivePortrait)**: `manifest.json`에서 캐릭터가 대사를 치는 샷(SKIT)을 자동 필터링합니다.
+2. **모션 매핑**: `[[MADNESS]]`나 `[[ANGRY]]` 같은 시각적 태그를 분석해 LivePortrait의 구동 템플릿(Driving video)을 결정합니다.
+3. **립싱크 합성**: 렌더링된 키프레임에 모션을 입히고, Stage 3에서 생성해 둔 TTS 음성(`.wav`)을 FFmpeg로 병합해 최종 `.mp4` 클립을 생성합니다.
+4. **Kitsu 상태 업데이트**: 완료된 애니메이션 클립을 Kitsu에 'Animation Complete'로 기록.
 
 ### ComfyUI 서버 시작
 ```bash

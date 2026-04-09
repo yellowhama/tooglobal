@@ -12,7 +12,9 @@
 - 컷 분해 (12씬 → 207컷, 분당 23.3컷)
 - 프롬프트 컴파일 (207컷 × compiled_prompt, qwen3.5 LLM)
 - 치비 캐릭터 8개국 골든샷 (2048x2048)
-- 3개 워크플로우 JSON 생성 완료
+- canonical 워크플로우 3개 생성 완료 (`stage1_composition`, `stage2_character`, `stage3_upscale`)
+- Stage 2.5 Kontext 슬롯은 러너/문서에 연결 완료
+  - 단, 실제 실행용 `stage2_5_kontext.json` API export 파일은 아직 없음
 
 **남은 것:**
 - scene_cluster 레퍼런스 매칭 개선
@@ -67,7 +69,7 @@
     - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\workflows\reference\CRT_FLUX SUPER (v4.3).json`
 
 17. **flux_lots_of_tweaks.json** — 얼굴/눈/손 등 “디테일러(Detector+Detailer)”가 포함된 대형 워크플로우 (실험용)
-    - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\workflows\flux_lots_of_tweaks.json`
+    - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\workflows\experimental\flux_lots_of_tweaks.json`
 
 ### 데이터
 13. **manifest.json** — 207컷 포함, compiled_prompt 완료
@@ -114,9 +116,20 @@ Stage 2: 캐릭터 입히기
   - Steps: 25
   - 출력: storyboard/stage2_character/s001_c001_char.png
   ↓
+Stage 2.5: Kontext 보정 (선택)
+  - 목적: 얼굴/손/캐릭터 일관성, 작은 깨짐을 업스케일 전에 정리
+  - 워크플로우: stage2_5_kontext.json (API format)
+    - 주의: `workflows/reference/Flux Kontext.json`는 UI 그래프 포맷이라 그대로는 실행 불가.
+      ComfyUI에서 **API 포맷으로 Export**해서 `workflows/stage2_5_kontext.json`로 저장해야 함.
+    - 필수 노드 타이틀:
+      - `Load Stage 2 Result`
+      - `Save Kontext Refined`
+  - 입력: Stage 2 결과(+ compiled_prompt 옵션)
+  - 출력: storyboard/stage2_kontext/s001_c001_kontext.png
+  ↓
 Stage 3: 퀄업
   - 워크플로우: stage3_upscale.json
-  - 입력: Stage 2 결과
+  - 입력: Stage 2.5 결과가 있으면 그걸 사용 (없으면 Stage 2 결과)
   - AnimeSharp 4x 업스케일 → 1920x1080 리사이즈 (센터 크롭 금지)
   - 출력: storyboard/panels/panel_s001_c001.png (최종)
 ```
@@ -128,9 +141,13 @@ Stage 3: 퀄업
 # 병렬 실행 금지: 동시에 두 프로세스를 켜면 `.render.lock`에 의해 실패한다.
 python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json
 
+# 전체 + Kontext (Stage2 뒤에 Stage2.5 pass를 끼움)
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --kontext
+
 # 특정 stage pass만 (운영 권장: stage별로 따로 돌리고, GPU 완전히 비면 다음 stage로)
 python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 1 --resume
 python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 2 --resume
+python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 25 --resume --kontext
 python3 pipeline/stage1_visuals/generate_panels_3stage.py --manifest episodes/ep01/manifest.json --stage 3 --resume
 
 # 특정 씬만
@@ -205,7 +222,7 @@ def find_golden(characters):
 
 4. **파이프라인 순서 절대 건너뛰지 말 것**:
    - decompose_cuts (메타만) → prompt_compiler (프롬프트) → generate_panels_3stage (렌더)
-   - Stage 1 → Stage 2 → Stage 3 순서
+   - Stage 1 → Stage 2 → optional Stage 2.5 → Stage 3 순서
 
 5. **병렬 실행 금지** — Stage 1 pass가 전량 끝나고 GPU가 비는 걸 확인한 뒤 Stage 2 pass 실행.
    - 러너는 에피소드별 `episodes/<ep>/storyboard/.render.lock`로 동시 실행을 막는다.

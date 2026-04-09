@@ -201,36 +201,64 @@ results = search_scenes(shot_size="ms", mood="comedy", limit=5)
 
 ## 8. 2단계 스토리보드 → 키프레임
 
-### Stage 1: 스토리보드 패널 (러프)
-- **목적**: 구도 확인용 러프 패널
-- **레퍼런스 소스**: 씬 클러스터 대표 프레임 (외부 작품)
-- **워크플로우**: `storyboard_quick.json`
+### Current Canonical Storyboard Pipeline
+- `Stage 1`: `workflows/stage1_composition.json`
+- `Stage 2`: `workflows/stage2_character.json`
+- `Stage 2.5` optional: `workflows/stage2_5_kontext.json`
+- `Stage 3`: `workflows/stage3_upscale.json`
 
-| 설정 | 값 | 이유 |
-|------|-----|------|
-| ControlNet Canny | 0.4/0.7 (high threshold) | 큰 구조선만, 캐릭터 디테일 무시 |
-| CN strength | 0.65 | |
-| CN end_percent | 0.4 | 초반 40%만 구도, 후반은 프롬프트 |
-| IP-Adapter | weight 0.4, end 0.4 | 골든샷 → 캐릭터 힌트 |
-| Steps | 20 | 러프니까 속도 우선 |
-| 해상도 | 1344x768 → 1920x1080 | |
+운영 규칙:
+- 병렬 실행 금지
+- Stage 1 pass 전체 완료 후 Stage 2
+- Kontext를 쓸 경우 Stage 2.5 뒤에 Stage 3
+- 최종 출력은 크롭 없이 `1920x1080`
 
-### Stage 2: 키프레임 (원화)
-- **목적**: 최종 영상용 고품질 프레임
-- **레퍼런스 소스**: Stage 1 스토리보드 패널 (우리 캐릭터가 이미 그려진)
-- **워크플로우**: `nichijou_ipadapter_keyframe.json`
+Legacy/archival workflows:
+- `workflows/legacy/storyboard_quick.json`
+- `workflows/legacy/nichijou_ipadapter_keyframe.json`
 
-| 설정 | 값 | 이유 |
-|------|-----|------|
-| ControlNet Canny | 0.2/0.4 (low threshold) | 캐릭터 윤곽선도 따라감 (우리 그림이니까) |
-| CN strength | 0.7 | |
-| CN end_percent | 0.6 | 60%까지 구도+캐릭터 가이드 |
-| IP-Adapter | weight 0.4, end 0.4 | 골든샷 |
-| Steps | 25 | |
-| LoRA | Flat_Anime @ 0.8 | |
-| 해상도 | 1344x768 → 4x AnimeSharp → 1920x1080 | |
+### 8.5 <<VIS>> 마커 + 프롬프트 컴파일
 
-**핵심 차이**: Stage 1은 외부 작품 레퍼런스에서 "구도만" 빌려오므로 CN threshold가 높고 end가 짧다. Stage 2는 "우리 그림"을 레퍼런스로 쓰므로 CN threshold가 낮고 end가 길다.
+대본에서 이미지까지 3단계 변환:
+
+```
+script.fountain (<<VIS>> 자연어 묘사)
+    ↓ fountain_to_manifest.py
+manifest.json (enriched_visual_prompt — 자연어 시각 묘사)
+    ↓ prompt_compiler.py
+manifest.json (compiled_prompt — booru 태그 200~350자)
+    ↓ generate_storyboard_full.py
+ComfyUI → 이미지
+```
+
+**<<VIS>> 블록 형식** (대본에서):
+```fountain
+.INT. APARTMENT HALLWAY - NIGHT
+
+<<VIS>>
+A narrow, dimly lit hallway. AMERICA stands at the door,
+cowboy hat tilted back, holding dynamite, confident grin.
+Camera: medium shot, eye level, dramatic side lighting.
+<</VIS>>
+```
+
+**prompt_compiler 변환 결과**:
+```
+flat anime, anime screencap, masterpiece, best quality,
+medium shot, waist up, cowboy shot,
+1girl, 20 years old, tall sexy body, large breasts, slim waist,
+standing, confident, holding,
+hallway, corridor, indoor, dark atmosphere, night,
+dramatic side lighting
+```
+
+**2캐릭터 처리**: 주인공 풀태그 5개 + 서브캐릭터 구분자 2태그 (머리색+옷)
+
+**명령어**:
+```bash
+python pipeline/shared/prompt_compiler.py --manifest episodes/ep01/manifest.json          # 저장
+python pipeline/shared/prompt_compiler.py --manifest episodes/ep01/manifest.json --preview  # 미리보기
+```
 
 ---
 

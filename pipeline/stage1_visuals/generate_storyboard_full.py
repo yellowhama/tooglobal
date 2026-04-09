@@ -18,7 +18,7 @@ sys.path.insert(0, str(PROJECT / "pipeline" / "shared"))
 from comfyui_client import ComfyUIClient
 from project_paths import get_screenshot_root
 
-WORKFLOW = PROJECT / "workflows" / "storyboard_quick.json"
+WORKFLOW = PROJECT / "workflows" / "legacy" / "storyboard_quick.json"
 CHAR_DIR = PROJECT / "assets" / "characters"
 SCREENSHOT_ROOT = get_screenshot_root()
 

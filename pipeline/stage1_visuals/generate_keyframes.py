@@ -41,8 +41,8 @@ MAX_RETRIES = 3
 
 # Paths
 SCORE_SCRIPT = PROJECT_ROOT / "pipeline" / "stage1_visuals" / "score_keyframe.py"
-CANNY_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "golden_chibi.json"
-IPADAPTER_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "golden_chibi.json"
+CANNY_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "legacy" / "golden_chibi.json"
+IPADAPTER_WORKFLOW_PATH = PROJECT_ROOT / "workflows" / "legacy" / "golden_chibi.json"
 GOLDEN_SHOT_DIR = PROJECT_ROOT / "assets" / "characters"
 
 # ─── SSOT import ───
@@ -557,10 +557,10 @@ def score_shot(shot_num: int, manifest_path: Path, image_dir: Path) -> tuple[boo
 def refine_with_img2img(keyframe_path: Path, prompt: str) -> bool:
     """Optional: refine PIL composite via ComfyUI img2img (Phase 4-A).
 
-    This requires ComfyUI running + img2img_refine.json workflow.
+    This requires ComfyUI running + legacy/img2img_refine.json workflow.
     Returns True if refinement was applied, False if skipped.
     """
-    workflow_path = PROJECT_ROOT / "workflows" / "img2img_refine.json"
+    workflow_path = PROJECT_ROOT / "workflows" / "legacy" / "img2img_refine.json"
     if not workflow_path.exists():
         return False  # Phase 4 not yet implemented
 

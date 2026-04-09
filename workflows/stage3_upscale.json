@@ -1,0 +1,66 @@
+{
+  "40": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-AnimeSharp.pth"
+    },
+    "_meta": {
+      "title": "Load AnimeSharp Upscaler"
+    }
+  },
+  "41": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "40",
+        0
+      ],
+      "image": [
+        "20",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "4x Upscale"
+    }
+  },
+  "42": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": [
+        "41",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "width": 1920,
+      "height": 1080,
+      "crop": "center"
+    },
+    "_meta": {
+      "title": "Scale to 1920x1080"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input.png",
+      "upload": "image"
+    },
+    "_meta": {
+      "title": "Load Stage 2 Result"
+    }
+  },
+  "14": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "42",
+        0
+      ],
+      "filename_prefix": "final"
+    },
+    "_meta": {
+      "title": "Save Final"
+    }
+  }
+}

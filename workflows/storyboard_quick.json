@@ -1,0 +1,371 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "flux1-dev-Q5_K_S.gguf"
+    },
+    "_meta": {
+      "title": "Load Flux 1 Dev GGUF"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoaderGGUF",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5-v1_1-xxl-encoder-Q5_K_M.gguf",
+      "type": "flux"
+    },
+    "_meta": {
+      "title": "Dual CLIP Loader"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "4": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "2",
+        0
+      ],
+      "lora_name": "Flat_Anime_Style_-_FLUX-000009.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8
+    },
+    "_meta": {
+      "title": "Flat Anime LoRA"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "4",
+        1
+      ],
+      "text": "flat anime, anime screencap, 1girl, school hallway"
+    },
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.jpg",
+      "upload": "image"
+    },
+    "_meta": {
+      "title": "Load Reference Screenshot"
+    }
+  },
+  "21": {
+    "class_type": "Canny",
+    "inputs": {
+      "image": [
+        "20",
+        0
+      ],
+      "low_threshold": 0.4,
+      "high_threshold": 0.7
+    },
+    "_meta": {
+      "title": "Canny Preprocessor"
+    }
+  },
+  "22": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "flux-controlnet-union-pro.safetensors"
+    },
+    "_meta": {
+      "title": "Load ControlNet"
+    }
+  },
+  "23": {
+    "class_type": "SetUnionControlNetType",
+    "inputs": {
+      "control_net": [
+        "22",
+        0
+      ],
+      "type": "canny/lineart/anime_lineart/mlsd"
+    },
+    "_meta": {
+      "title": "Set Canny Type"
+    }
+  },
+  "24": {
+    "class_type": "ControlNetApplySD3",
+    "inputs": {
+      "positive": [
+        "26",
+        0
+      ],
+      "negative": [
+        "26",
+        0
+      ],
+      "control_net": [
+        "23",
+        0
+      ],
+      "image": [
+        "21",
+        0
+      ],
+      "strength": 0.65,
+      "start_percent": 0.0,
+      "end_percent": 0.55,
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Apply ControlNet"
+    }
+  },
+  "30": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "character_golden.png",
+      "upload": "image"
+    },
+    "_meta": {
+      "title": "Load Character Golden Shot"
+    }
+  },
+  "31": {
+    "class_type": "IPAdapterFluxLoader",
+    "inputs": {
+      "ipadapter": "ip-adapter.bin",
+      "clip_vision": "google/siglip-so400m-patch14-384",
+      "provider": "cuda"
+    },
+    "_meta": {
+      "title": "Load IP-Adapter"
+    }
+  },
+  "32": {
+    "class_type": "ApplyIPAdapterFlux",
+    "inputs": {
+      "model": [
+        "4",
+        0
+      ],
+      "ipadapter_flux": [
+        "31",
+        0
+      ],
+      "image": [
+        "30",
+        0
+      ],
+      "weight": 0.4,
+      "start_percent": 0.0,
+      "end_percent": 0.4
+    },
+    "_meta": {
+      "title": "Apply IP-Adapter"
+    }
+  },
+  "25": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 42
+    },
+    "_meta": {
+      "title": "Random Noise"
+    }
+  },
+  "26": {
+    "class_type": "FluxGuidance",
+    "inputs": {
+      "conditioning": [
+        "5",
+        0
+      ],
+      "guidance": 3.5
+    },
+    "_meta": {
+      "title": "Flux Guidance"
+    }
+  },
+  "27": {
+    "class_type": "ModelSamplingFlux",
+    "inputs": {
+      "model": [
+        "32",
+        0
+      ],
+      "max_shift": 1.15,
+      "base_shift": 0.5,
+      "width": 1344,
+      "height": 768
+    },
+    "_meta": {
+      "title": "Model Sampling Flux"
+    }
+  },
+  "28": {
+    "class_type": "BasicScheduler",
+    "inputs": {
+      "model": [
+        "27",
+        0
+      ],
+      "scheduler": "normal",
+      "steps": 20,
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "Scheduler"
+    }
+  },
+  "29": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "_meta": {
+      "title": "Sampler Select"
+    }
+  },
+  "33": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "27",
+        0
+      ],
+      "conditioning": [
+        "24",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Guider"
+    }
+  },
+  "12": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "25",
+        0
+      ],
+      "guider": [
+        "33",
+        0
+      ],
+      "sampler": [
+        "29",
+        0
+      ],
+      "sigmas": [
+        "28",
+        0
+      ],
+      "latent_image": [
+        "7",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Sampler (Advanced)"
+    }
+  },
+  "7": {
+    "class_type": "EmptySD3LatentImage",
+    "inputs": {
+      "width": 1344,
+      "height": 768,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Latent Image (1344x768)"
+    }
+  },
+  "13": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "12",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "40": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "4x-AnimeSharp.pth"
+    },
+    "_meta": {
+      "title": "Load AnimeSharp Upscaler"
+    }
+  },
+  "41": {
+    "class_type": "ImageUpscaleWithModel",
+    "inputs": {
+      "upscale_model": [
+        "40",
+        0
+      ],
+      "image": [
+        "13",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "4x Upscale"
+    }
+  },
+  "42": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": [
+        "41",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "width": 1920,
+      "height": 1080,
+      "crop": "center"
+    },
+    "_meta": {
+      "title": "Scale to 1920x1080"
+    }
+  },
+  "14": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "42",
+        0
+      ],
+      "filename_prefix": "keyframe"
+    },
+    "_meta": {
+      "title": "Save Keyframe"
+    }
+  }
+}

@@ -15,7 +15,6 @@
 - 3개 워크플로우 JSON 생성 완료
 
 **남은 것:**
-- `generate_panels_3stage.py` 작성 (3단계 렌더러)
 - scene_cluster 레퍼런스 매칭 개선
 - S001 11컷 3단계 테스트
 - 207컷 전체 원화 생성

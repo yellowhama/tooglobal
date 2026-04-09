@@ -17,6 +17,7 @@ Windows path (WSL): `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\
 - `pipeline/stage1_visuals/decompose_cuts.py` — script to split scenes into cuts/shots (metadata only)
 - `pipeline/stage1_visuals/generate_storyboard_full.py` — current single-pass renderer (reference for 3-stage renderer)
 - `pipeline/stage1_visuals/generate_keyframes.py` — IP-Adapter + ControlNet patterns
+- `pipeline/stage1_visuals/generate_panels_3stage.py` — 3-stage runner (Stage1 layout -> Stage2 character -> Stage3 upscale)
 
 ## Workflows (ComfyUI)
 
@@ -36,4 +37,3 @@ Reference/Research workflows:
 - `episodes/ep01/manifest.json` — 207 cuts; each cut has `compiled_prompt`
 - `context/scene_clusters.json` — 5,518 clustered reference scenes
 - `context/SHOW_BIBLE.md` — tone/style rules and constraints
-

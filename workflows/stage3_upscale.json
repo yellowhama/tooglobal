@@ -34,10 +34,10 @@
       "upscale_method": "lanczos",
       "width": 1920,
       "height": 1080,
-      "crop": "center"
+      "crop": "disabled"
     },
     "_meta": {
-      "title": "Scale to 1920x1080"
+      "title": "Scale to 1920x1080 (No Crop)"
     }
   },
   "20": {

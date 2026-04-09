@@ -212,8 +212,8 @@
       ],
       "max_shift": 1.15,
       "base_shift": 0.5,
-      "width": 1024,
-      "height": 1024
+      "width": 1344,
+      "height": 768
     },
     "_meta": {
       "title": "Model Sampling Flux"
@@ -290,12 +290,12 @@
   "7": {
     "class_type": "EmptySD3LatentImage",
     "inputs": {
-      "width": 1024,
-      "height": 1024,
+      "width": 1344,
+      "height": 768,
       "batch_size": 1
     },
     "_meta": {
-      "title": "Latent Image (1024x1024)"
+      "title": "Latent Image (1344x768)"
     }
   },
   "13": {

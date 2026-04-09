@@ -54,10 +54,10 @@
    - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\pipeline\shared\comfyui_client.py`
 
 ### 워크플로우 JSON (이미 생성 완료)
-10. **stage1_composition.json** — Stage 1 (구도: Depth ControlNet only, 768x768, 15 steps)
+10. **stage1_composition.json** — Stage 1 (구도: Depth ControlNet only, 1344x768, 15 steps)
     - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\workflows\stage1_composition.json`
 
-11. **stage2_character.json** — Stage 2 (캐릭터: IP-Adapter 0.5 + CN 0.15, 1024x1024, 25 steps)
+11. **stage2_character.json** — Stage 2 (캐릭터: IP-Adapter 0.5 + CN 0.15, 1344x768, 25 steps)
     - `\\wsl.localhost\Ubuntu-22.04\home\hugh\youtube-studio-copy\workflows\stage2_character.json`
 
 12. **stage3_upscale.json** — Stage 3 (퀄업: AnimeSharp 4x → 1920x1080)
@@ -100,7 +100,7 @@ Stage 1: 구도 잡기
   - 입력: scene_clusters에서 레퍼런스 스크린샷 + compiled_prompt
   - ControlNet: Depth 0.3 (레퍼런스 구도 전이)
   - IP-Adapter: OFF
-  - 해상도: 768x768
+  - 해상도: 1344x768 (16:9)
   - Steps: 15 (빠르게)
   - 출력: storyboard/stage1_layout/s001_c001_layout.png
   ↓
@@ -111,14 +111,14 @@ Stage 2: 캐릭터 입히기
     - 구현상: `end_percent=0.2` (짧게만 걸어두는 구성)
   - IP-Adapter: 0.5 (골든샷 캐릭터 전이)
     - 구현상: `end_percent=0.5`
-  - 해상도: 1024x1024
+  - 해상도: 1344x768 (16:9)
   - Steps: 25
   - 출력: storyboard/stage2_character/s001_c001_char.png
   ↓
 Stage 3: 퀄업
   - 워크플로우: stage3_upscale.json
   - 입력: Stage 2 결과
-  - AnimeSharp 4x 업스케일 → 1920x1080 리사이즈
+  - AnimeSharp 4x 업스케일 → 1920x1080 리사이즈 (센터 크롭 금지)
   - 출력: storyboard/panels/panel_s001_c001.png (최종)
 ```
 
@@ -219,8 +219,8 @@ Stage 1/2는 Union ControlNet 타입을 **depth**로 사용한다.
 - 워크플로우 노드 타이틀은 `Set Canny Type`로 남아있지만, 실제 입력은 `"type": "depth"`다.
 
 Stage 1/2는 latent 해상도와 ModelSamplingFlux 해상도가 일치하도록 맞춰져 있다.
-- Stage 1: 768x768
-- Stage 2: 1024x1024
+- Stage 1: 1344x768
+- Stage 2: 1344x768
 
 ---
 

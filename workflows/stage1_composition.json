@@ -168,7 +168,7 @@
       ],
       "max_shift": 1.15,
       "base_shift": 0.5,
-      "width": 768,
+      "width": 1344,
       "height": 768
     },
     "_meta": {
@@ -246,12 +246,12 @@
   "7": {
     "class_type": "EmptySD3LatentImage",
     "inputs": {
-      "width": 768,
+      "width": 1344,
       "height": 768,
       "batch_size": 1
     },
     "_meta": {
-      "title": "Latent Image (768x768)"
+      "title": "Latent Image (1344x768)"
     }
   },
   "13": {
